@@ -1,0 +1,139 @@
+<?php
+class Kasir extends CI_Controller
+{
+    /**
+     * Konstruktor Class Kasir.
+     * Secara otomatis membatasi akses, hanya pengguna dengan peran 'kasir' yang boleh masuk.
+     * Jika gagal, dikembalikan ke halaman login.
+     * Memuat model Order dan Transaction.
+     */
+    public function __construct()
+    {
+        parent::__construct();
+        if (!$this->session->userdata('user_id') || $this->session->userdata('role') != 'kasir') {
+            redirect('auth/login');
+        }
+        $this->load->model('Product_model');
+        $this->load->model('Order_model');
+        $this->load->model('Transaction_model');
+    }
+
+    /**
+     * Halaman Utama (Dashboard) Kasir.
+     * Menampilkan daftar pesanan yang berstatus pending, processing, dan completed.
+     * Menghitung pendapatan harian berdasarkan rentang tanggal.
+     */
+    public function index()
+    {
+        $start_date = $this->input->get('start_date');
+        $end_date = $this->input->get('end_date');
+        $tab = $this->input->get('tab');
+        $data['orders'] = $this->Order_model->get_all_pending();
+        $data['processing_orders'] = $this->Order_model->get_all_processing();
+        $data['completed_orders'] = $this->Order_model->get_all_completed();
+        $data['daily_revenue'] = $this->Order_model->get_daily_completed_revenue($start_date, $end_date);
+        $data['start_date'] = $start_date;
+        $data['end_date'] = $end_date;
+        $data['active_tab'] = $tab ?: ($start_date || $end_date ? 'revenue' : 'pending');
+        $this->load->view('templates/header_kasir');
+        $this->load->view('kasir/dashboard', $data);
+        $this->load->view('templates/footer_kasir');
+    }
+
+    /**
+     * Halaman Detail Pendapatan (Revenue Detail).
+     * Menampilkan seluruh transaksi yang selesai pada tanggal tertentu, 
+     * beserta kalkulasi total pendapatannya.
+     * 
+     * @param string $date Tanggal dalam format YYYY-MM-DD
+     */
+    public function revenue_detail($date)
+    {
+        $data['date'] = $date;
+        $data['orders'] = $this->Order_model->get_completed_by_date($date);
+        $total_revenue = 0;
+        foreach ($data['orders'] as $o)
+            $total_revenue += $o['total'];
+        $data['total_revenue'] = $total_revenue;
+        $this->load->view('kasir/revenue_detail', $data);
+    }
+
+    /**
+     * Halaman Detail Pesanan.
+     * Menampilkan informasi pesanan secara rinci (rincian item/menu yang dibeli).
+     * 
+     * @param int $order_id ID pesanan
+     */
+    public function order_detail($order_id)
+    {
+        $data['order'] = $this->Order_model->get_with_items($order_id);
+        $this->load->view('kasir/order_detail', $data);
+    }
+
+    /**
+     * Proses Menyiapkan Pesanan.
+     * Merubah status pesanan dari 'pending' (menunggu) menjadi 'processing' (sedang diproses).
+     * 
+     * @param int $order_id ID pesanan
+     */
+    public function proses($order_id)
+    {
+        $order = $this->Order_model->get($order_id);
+        if ($order && $order['status'] == 'pending') {
+            $this->Order_model->update_status($order_id, 'processing');
+        }
+        redirect('kasir');
+    }
+
+    /**
+     * Tambah Item (Belum Diimplementasikan).
+     * Rencananya digunakan untuk menambah produk ke dalam pesanan melalui AJAX.
+     */
+    public function add_item()
+    {
+    }
+
+    /**
+     * Hapus Item (Belum Diimplementasikan).
+     * Rencananya digunakan untuk menghapus produk dari pesanan melalui AJAX.
+     */
+    public function remove_item()
+    {
+    }
+
+    /**
+     * Cetak Struk (Receipt).
+     * Memuat halaman khusus berisi format struk pembelian siap cetak.
+     * 
+     * @param int $order_id ID pesanan yang akan dicetak
+     */
+    public function print_struk($order_id)
+    {
+        $data['order'] = $this->Order_model->get_with_items($order_id);
+        $this->load->view('kasir/struk', $data);
+    }
+
+    /**
+     * Proses Pembayaran Pesanan.
+     * Mencatat pesanan yang sudah 'processing' ke dalam tabel transaksi, 
+     * lalu mengubah status pesanannya menjadi 'completed' (selesai).
+     * 
+     * @param int $order_id ID pesanan yang dilunasi
+     */
+    public function bayar($order_id)
+    {
+        $order = $this->Order_model->get($order_id);
+        if ($order && $order['status'] == 'processing') {
+            $data = [
+                'order_id' => $order_id,
+                'kasir_id' => $this->session->userdata('user_id'),
+                'total' => $order['total'],
+                'payment_method' => $order['payment_method'] ?: 'cash',
+                'status' => 'paid'
+            ];
+            $this->Transaction_model->create($data);
+            $this->Order_model->update_status($order_id, 'completed');
+        }
+        redirect('kasir');
+    }
+}
